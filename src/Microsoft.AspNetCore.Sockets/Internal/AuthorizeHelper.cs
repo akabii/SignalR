@@ -21,14 +21,14 @@ namespace Microsoft.AspNetCore.Sockets.Internal
             }
 
             var policyProvider = context.RequestServices.GetRequiredService<IAuthorizationPolicyProvider>();
-            var authorizeAttributes = new List<AuthorizeAttribute>();
+            var authorizeData = new List<IAuthorizeData>();
 
             foreach (var policy in policies)
             {
-                authorizeAttributes.Add(new AuthorizeAttribute(policy));
+                authorizeData.Add(new AuthorizeAttribute(policy));
             }
 
-            var authorizePolicy = await AuthorizationPolicy.CombineAsync(policyProvider, authorizeAttributes);
+            var authorizePolicy = await AuthorizationPolicy.CombineAsync(policyProvider, authorizeData);
             if (authorizePolicy.AuthenticationSchemes != null && authorizePolicy.AuthenticationSchemes.Count > 0)
             {
                 ClaimsPrincipal newPrincipal = null;
