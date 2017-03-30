@@ -30,13 +30,13 @@ namespace Microsoft.AspNetCore.Sockets.Client
 
         private IChannelConnection<SendMessage, Message> _application;
         private CancellationToken _cancellationToken = new CancellationToken();
-        private MessageParser _parser = new MessageParser();
+        private ServerSentEventsMessageParser _parser = new ServerSentEventsMessageParser();
 
         public Task Running { get; private set; } = Task.CompletedTask;
 
         public ServerSentEventsTransport(HttpClient httpClient)
             : this(httpClient, null)
-            { }
+        { }
         public ServerSentEventsTransport(HttpClient httpClient, ILoggerFactory loggerFactory)
         {
             _httpClient = httpClient;
@@ -73,24 +73,70 @@ namespace Microsoft.AspNetCore.Sockets.Client
             var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
             var stream = await response.Content.ReadAsStreamAsync();
-            using (var streamReader = new StreamReader(stream))
-            {
-                var eventSourceData = new StringBuilder();
-                string line = string.Empty;
-                while ((line = await streamReader.ReadLineAsync()) != null)
-                {
-                    eventSourceData.Append(line);
-                    if (string.IsNullOrEmpty(line))
-                    {
-                        var payload = Encoding.UTF8.GetBytes(eventSourceData.ToString());
-                        var message = new Message(payload, MessageType.Text);
-                        _application.Output.TryWrite(message);
-                        eventSourceData.Clear();
-                    }
-                }
-            }
-        }
 
+            var pipelineReader = stream.AsPipelineReader();
+
+            while (true)
+            {
+                var result = await pipelineReader.ReadAsync();
+                var input = result.Buffer;
+                var consumed = input.Start;
+                var examined = input.End;
+
+                try
+                {
+                    if (input.IsEmpty && result.IsCompleted)
+                    {
+                        _logger.LogDebug("Done reading from pipeline");
+                        break;
+                    }
+
+                    var parseResult = _parser.ParseMessage(input, out consumed, out examined, out var message);
+
+                    switch (parseResult)
+                    {
+                        case ServerSentEventsMessageParser.ParsePhase.Completed:
+                            break;
+                        case ServerSentEventsMessageParser.ParsePhase.Incomplete:
+                            if (result.IsCompleted)
+                            {
+                                throw new FormatException("There was an error parsing");
+                            }
+
+                            _parser.Reset();
+                            continue;
+                        case ServerSentEventsMessageParser.ParsePhase.Error:
+                            throw new FormatException("There was an error parsing");
+                    }
+
+                    _application.Output.TryWrite(message);
+                    break;
+                }
+                finally
+                {
+                    pipelineReader.Advance(consumed, examined);
+                }
+
+            }
+
+            //using (var streamReader = new StreamReader(stream))
+            //{
+            //    var eventSourceData = new StringBuilder();
+            //    string line = string.Empty;
+            //    while ((line = await streamReader.ReadLineAsync()) != null)
+            //    {
+            //        eventSourceData.Append(line);
+            //        if (string.IsNullOrEmpty(line))
+            //        {
+            //            var parsedData = _parser.ParseSSEMessage(eventSourceData.ToString());
+            //            var payload = Encoding.UTF8.GetBytes(eventSourceData.ToString());
+            //            var message = new Message(payload, MessageType.Text);
+            //            _application.Output.TryWrite(message);
+            //            eventSourceData.Clear();
+            //        }
+            //    }
+            //}
+        }
 
         public async Task SendMessages(Uri sendUrl, CancellationToken cancellationToken)
         {
@@ -102,7 +148,7 @@ namespace Microsoft.AspNetCore.Sockets.Client
                 while (await _application.Input.WaitToReadAsync(cancellationToken))
                 {
                     messages = new List<SendMessage>();
-                    while(!cancellationToken.IsCancellationRequested && _application.Input.TryRead(out SendMessage message))
+                    while (!cancellationToken.IsCancellationRequested && _application.Input.TryRead(out SendMessage message))
                     {
                         messages.Add(message);
                     }
@@ -132,7 +178,7 @@ namespace Microsoft.AspNetCore.Sockets.Client
                         foreach (var message in messages)
                         {
                             message.SendResult?.TrySetResult(null);
-                        }  
+                        }
                     }
                 }
             }
@@ -142,13 +188,13 @@ namespace Microsoft.AspNetCore.Sockets.Client
 
                 if (messages != null)
                 {
-                    foreach(var message in messages)
+                    foreach (var message in messages)
                     {
                         message.SendResult?.TrySetCanceled();
                     }
                 }
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 _logger.LogDebug("Error while sending to '{0}' : '{1}'", sendUrl, ex);
                 if (messages != null)
@@ -158,15 +204,15 @@ namespace Microsoft.AspNetCore.Sockets.Client
                         message.SendResult?.TrySetException(ex);
                     }
                 }
-            throw;
+                throw;
             }
-                finally
-                {
-                    // Make sure the poll loop is terminated
-                    _transportCts.Cancel();
-                }
+            finally
+            {
+                // Make sure the poll loop is terminated
+                _transportCts.Cancel();
+            }
 
-              _logger.LogInformation("Send loop stopped");
+            _logger.LogInformation("Send loop stopped");
         }
 
         private async Task WriteMessagesAsync(IList<SendMessage> messages, PipelineTextOutput output, MessageFormat format)

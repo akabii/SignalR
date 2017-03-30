@@ -67,8 +67,9 @@ namespace Microsoft.AspNetCore.SignalR.Tests
         {
             get
             {
-                yield return new object[] { new Func<ILoggerFactory, ITransport>(loggerFactory => new WebSocketsTransport(loggerFactory)) };
-                yield return new object[] { new Func<ILoggerFactory, ITransport>(loggerFactory => new LongPollingTransport(new HttpClient(), loggerFactory)) };
+                //yield return new object[] { new Func<ILoggerFactory, ITransport>(loggerFactory => new WebSocketsTransport(loggerFactory)) };
+                //yield return new object[] { new Func<ILoggerFactory, ITransport>(loggerFactory => new LongPollingTransport(new HttpClient(), loggerFactory)) };
+                yield return new object[] { new Func<ILoggerFactory, ITransport>(loggerFactory => new ServerSentEventsTransport(new HttpClient(), loggerFactory)) };
             }
         }
 
@@ -107,9 +108,7 @@ namespace Microsoft.AspNetCore.SignalR.Tests
 
                     await connection.SendAsync(Encoding.UTF8.GetBytes(message), MessageType.Text);
 
-                    var receiveData = new ReceiveData();
-
-                    Assert.Equal(message, await receiveTcs.Task.OrTimeout());
+                    Assert.Equal(message, await receiveTcs.Task);
                 }
                 finally
                 {
